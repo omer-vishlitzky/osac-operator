@@ -594,6 +594,10 @@ func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, insta
 	latestDeprovisionJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeDeprovision)
 
 	if !provisioning.HasJobID(latestDeprovisionJob) {
+		if provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.apiReader, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{}) {
+			log.Info("skipping deprovision trigger: non-terminal job found via API server read-through")
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
 		return provisioning.TriggerDeprovisionJob(ctx, r.ProvisioningProvider, instance,
 			&instance.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
 	}

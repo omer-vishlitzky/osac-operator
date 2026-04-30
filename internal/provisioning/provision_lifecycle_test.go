@@ -24,8 +24,11 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 )
@@ -570,5 +573,94 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 		Expect(result).To(Equal(ctrl.Result{}))
+	})
+})
+
+var _ = ginkgo.Describe("CheckAPIServerForNonTerminalDeprovisionJob", func() {
+	var (
+		testScheme *runtime.Scheme
+		key        types.NamespacedName
+	)
+
+	ginkgo.BeforeEach(func() {
+		testScheme = runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(testScheme)).To(Succeed())
+		key = types.NamespacedName{Name: "test-ci", Namespace: "test-ns"}
+	})
+
+	ginkgo.It("returns false when resource does not exist", func() {
+		apiReader := fake.NewClientBuilder().WithScheme(testScheme).Build()
+		result := CheckAPIServerForNonTerminalDeprovisionJob(ctx, apiReader, key, &v1alpha1.ComputeInstance{})
+		Expect(result).To(BeFalse())
+	})
+
+	ginkgo.It("returns false when no deprovision job exists", func() {
+		ci := &v1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+			Status: v1alpha1.ComputeInstanceStatus{
+				Jobs: []v1alpha1.JobStatus{
+					{JobID: "prov-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now())},
+				},
+			},
+		}
+		apiReader := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(ci).Build()
+		result := CheckAPIServerForNonTerminalDeprovisionJob(ctx, apiReader, key, &v1alpha1.ComputeInstance{})
+		Expect(result).To(BeFalse())
+	})
+
+	ginkgo.It("returns false when deprovision job is in terminal state (Succeeded)", func() {
+		ci := &v1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+			Status: v1alpha1.ComputeInstanceStatus{
+				Jobs: []v1alpha1.JobStatus{
+					{JobID: "deprov-1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now())},
+				},
+			},
+		}
+		apiReader := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(ci).Build()
+		result := CheckAPIServerForNonTerminalDeprovisionJob(ctx, apiReader, key, &v1alpha1.ComputeInstance{})
+		Expect(result).To(BeFalse())
+	})
+
+	ginkgo.It("returns false when deprovision job is in terminal state (Failed)", func() {
+		ci := &v1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+			Status: v1alpha1.ComputeInstanceStatus{
+				Jobs: []v1alpha1.JobStatus{
+					{JobID: "deprov-1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateFailed, Timestamp: metav1.NewTime(time.Now())},
+				},
+			},
+		}
+		apiReader := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(ci).Build()
+		result := CheckAPIServerForNonTerminalDeprovisionJob(ctx, apiReader, key, &v1alpha1.ComputeInstance{})
+		Expect(result).To(BeFalse())
+	})
+
+	ginkgo.It("returns true when deprovision job is in non-terminal state (Running)", func() {
+		ci := &v1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+			Status: v1alpha1.ComputeInstanceStatus{
+				Jobs: []v1alpha1.JobStatus{
+					{JobID: "deprov-1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now())},
+				},
+			},
+		}
+		apiReader := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(ci).Build()
+		result := CheckAPIServerForNonTerminalDeprovisionJob(ctx, apiReader, key, &v1alpha1.ComputeInstance{})
+		Expect(result).To(BeTrue())
+	})
+
+	ginkgo.It("returns true when deprovision job is in non-terminal state (Pending)", func() {
+		ci := &v1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+			Status: v1alpha1.ComputeInstanceStatus{
+				Jobs: []v1alpha1.JobStatus{
+					{JobID: "deprov-1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStatePending, Timestamp: metav1.NewTime(time.Now())},
+				},
+			},
+		}
+		apiReader := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(ci).Build()
+		result := CheckAPIServerForNonTerminalDeprovisionJob(ctx, apiReader, key, &v1alpha1.ComputeInstance{})
+		Expect(result).To(BeTrue())
 	})
 })

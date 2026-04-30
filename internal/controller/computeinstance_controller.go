@@ -62,6 +62,7 @@ type ComputeInstanceReconciler struct {
 	client.Client
 	Scheme                   *runtime.Scheme
 	mgr                      mcmanager.Manager
+	apiReader                client.Reader
 	ComputeInstanceNamespace string
 	TenantNamespace          string
 	ProvisioningProvider     provisioning.ProvisioningProvider
@@ -101,6 +102,7 @@ func NewComputeInstanceReconciler(
 		Client:                   mgr.GetLocalManager().GetClient(),
 		Scheme:                   mgr.GetLocalManager().GetScheme(),
 		mgr:                      mgr,
+		apiReader:                mgr.GetLocalManager().GetAPIReader(),
 		ComputeInstanceNamespace: computeInstanceNamespace,
 		TenantNamespace:          tenantNamespace,
 		ProvisioningProvider:     provisioningProvider,
@@ -396,6 +398,10 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 
 	// Trigger deprovisioning - provider decides internally if ready
 	if !provisioning.HasJobID(latestDeprovisionJob) {
+		if provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.apiReader, client.ObjectKeyFromObject(instance), &v1alpha1.ComputeInstance{}) {
+			log.Info("skipping deprovision trigger: non-terminal job found via API server read-through")
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
 		log.Info("triggering deprovisioning", "provider", r.ProvisioningProvider.Name())
 
 		result, err := r.ProvisioningProvider.TriggerDeprovision(ctx, instance)

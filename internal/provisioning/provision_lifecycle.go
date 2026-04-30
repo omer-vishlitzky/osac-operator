@@ -105,6 +105,22 @@ func CheckAPIServerForNonTerminalProvisionJob(ctx context.Context, apiReader cli
 	return false
 }
 
+// CheckAPIServerForNonTerminalDeprovisionJob reads the resource directly from the API server
+// and returns true if a non-terminal deprovision job exists.
+func CheckAPIServerForNonTerminalDeprovisionJob(ctx context.Context, apiReader client.Reader, key client.ObjectKey, fresh client.Object) bool {
+	log := ctrllog.FromContext(ctx)
+	if err := apiReader.Get(ctx, key, fresh); err != nil {
+		return false
+	}
+	freshJobs := GetJobsFromResource(fresh)
+	freshJob := FindLatestJobByType(freshJobs, v1alpha1.JobTypeDeprovision)
+	if HasJobID(freshJob) && !freshJob.State.IsTerminal() {
+		log.Info("skipping deprovision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "state", freshJob.State)
+		return true
+	}
+	return false
+}
+
 // TriggerJob triggers a new provision job and updates the jobs slice in place via State.
 func TriggerJob(ctx context.Context, provider ProvisioningProvider, resource client.Object, provState *State, maxHistory int, pollInterval time.Duration) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
