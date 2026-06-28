@@ -1189,9 +1189,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 				kvVM(kubevirtv1.VirtualMachineStatusStopping), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseStopping),
 			Entry("Stopped → Stopped",
 				kvVM(kubevirtv1.VirtualMachineStatusStopped), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseStopped),
+			// Unschedulable is transient during initial VM boot — preserves current phase
+			Entry("Unschedulable preserves Starting phase",
+				kvVM(kubevirtv1.VirtualMachineStatusUnschedulable), osacv1alpha1.ComputeInstancePhaseStarting, osacv1alpha1.ComputeInstancePhaseStarting),
 			// Error states
-			Entry("ErrorUnschedulable → Failed",
-				kvVM(kubevirtv1.VirtualMachineStatusUnschedulable), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseFailed),
 			Entry("CrashLoopBackOff → Failed",
 				kvVM(kubevirtv1.VirtualMachineStatusCrashLoopBackOff), osacv1alpha1.ComputeInstancePhaseType(""), osacv1alpha1.ComputeInstancePhaseFailed),
 			Entry("Terminating → Failed",
@@ -1242,13 +1243,13 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 				},
 				"Boot disk provisioning failed: PVC not found"),
-			Entry("ErrorUnschedulable",
+			Entry("Unschedulable is transient, returns empty",
 				&kubevirtv1.VirtualMachine{
 					Status: kubevirtv1.VirtualMachineStatus{
 						PrintableStatus: kubevirtv1.VirtualMachineStatusUnschedulable,
 					},
 				},
-				"VM scheduling failed: unschedulable"),
+				""),
 			Entry("CrashLoopBackOff",
 				&kubevirtv1.VirtualMachine{
 					Status: kubevirtv1.VirtualMachineStatus{
@@ -1461,7 +1462,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(provCond.Message).To(ContainSubstring("Boot disk provisioning failed: PVC not found"))
 		})
 
-		It("sets Provisioned=False when VM is ErrorUnschedulable", func() {
+		It("preserves Provisioned condition when VM is Unschedulable (transient during boot)", func() {
+			instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, "VirtualMachine not yet created, waiting for provisioning", osacv1alpha1.ReasonWaitingForVM)
 			kv := &kubevirtv1.VirtualMachine{
 				Status: kubevirtv1.VirtualMachineStatus{
 					PrintableStatus: kubevirtv1.VirtualMachineStatusUnschedulable,
@@ -1471,8 +1473,21 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningFailed))
-			Expect(provCond.Message).To(ContainSubstring("VM scheduling failed"))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonWaitingForVM))
+		})
+
+		It("preserves Provisioned condition when PrintableStatus is empty (transient at VM creation)", func() {
+			instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, "VirtualMachine not yet created, waiting for provisioning", osacv1alpha1.ReasonWaitingForVM)
+			kv := &kubevirtv1.VirtualMachine{
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: "",
+				},
+			}
+			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+
+			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonWaitingForVM))
 		})
 
 		It("sets Provisioned=False for unknown PrintableStatus", func() {

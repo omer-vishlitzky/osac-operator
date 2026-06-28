@@ -802,7 +802,10 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, target
 	// etc.) indicate success. Unknown/new statuses default to error to avoid falsely
 	// claiming success.
 	oldProvisionedReason := conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned)
-	if kv.Status.PrintableStatus == kubevirtv1.VirtualMachineStatusProvisioning {
+	if kv.Status.PrintableStatus == "" || kv.Status.PrintableStatus == kubevirtv1.VirtualMachineStatusUnschedulable {
+		log.Info("PrintableStatus is transient, skipping provisioned condition update",
+			"printableStatus", kv.Status.PrintableStatus)
+	} else if kv.Status.PrintableStatus == kubevirtv1.VirtualMachineStatusProvisioning {
 		msg := fmt.Sprintf("Creating DataVolumes for boot disk (%dGiB)", instance.Spec.BootDisk.SizeGiB)
 		if len(instance.Spec.AdditionalDisks) > 0 {
 			msg = fmt.Sprintf("%s and %d additional disk(s)", msg, len(instance.Spec.AdditionalDisks))
@@ -904,8 +907,6 @@ func provisioningErrorMessage(kv *kubevirtv1.VirtualMachine) string {
 		prefix = "Boot disk provisioning failed"
 	case kubevirtv1.VirtualMachineStatusPvcNotFound:
 		prefix = "Boot disk provisioning failed: PVC not found"
-	case kubevirtv1.VirtualMachineStatusUnschedulable:
-		prefix = "VM scheduling failed: unschedulable"
 	case kubevirtv1.VirtualMachineStatusCrashLoopBackOff:
 		prefix = "VM is in CrashLoopBackOff"
 	case kubevirtv1.VirtualMachineStatusErrImagePull,
@@ -955,8 +956,10 @@ func isOperationalStatus(status kubevirtv1.VirtualMachinePrintableStatus) bool {
 // determinePhaseFromPrintableStatus maps a KubeVirt VirtualMachine's PrintableStatus
 // to a ComputeInstancePhaseType.
 //
-// Transient startup states (Provisioning, WaitingForVolumeBinding) map to Starting
-// because they are normal steps in the VM creation sequence, not error conditions.
+// Transient startup states (Provisioning, WaitingForVolumeBinding, Unschedulable) map
+// to Starting because they are normal steps in the VM creation sequence, not error
+// conditions. Unschedulable occurs transiently during initial boot before the VMI is
+// scheduled.
 //
 // Paused is checked via both PrintableStatus (KubeVirt v1.6.0+) and the VirtualMachinePaused
 // condition (older versions where PrintableStatus stayed "Running" when paused).
@@ -971,7 +974,7 @@ func isOperationalStatus(status kubevirtv1.VirtualMachinePrintableStatus) bool {
 // has processed the new VM CR. Like Unknown, it preserves the current phase to avoid a
 // transient Failed.
 //
-// All remaining values (Terminating, CrashLoopBackOff, ErrorUnschedulable, ErrImagePull,
+// All remaining values (Terminating, CrashLoopBackOff, ErrImagePull,
 // ImagePullBackOff, ErrorPvcNotFound, DataVolumeError) map to Failed.
 func determinePhaseFromPrintableStatus(ctx context.Context, kv *kubevirtv1.VirtualMachine, currentPhase v1alpha1.ComputeInstancePhaseType) v1alpha1.ComputeInstancePhaseType {
 	log := ctrllog.FromContext(ctx)
@@ -982,7 +985,8 @@ func determinePhaseFromPrintableStatus(ctx context.Context, kv *kubevirtv1.Virtu
 	switch kv.Status.PrintableStatus {
 	case kubevirtv1.VirtualMachineStatusProvisioning,
 		kubevirtv1.VirtualMachineStatusWaitingForVolumeBinding,
-		kubevirtv1.VirtualMachineStatusStarting:
+		kubevirtv1.VirtualMachineStatusStarting,
+		kubevirtv1.VirtualMachineStatusUnschedulable:
 		return v1alpha1.ComputeInstancePhaseStarting
 	case kubevirtv1.VirtualMachineStatusPaused:
 		return v1alpha1.ComputeInstancePhasePaused
